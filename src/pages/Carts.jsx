@@ -29,7 +29,7 @@ import {
 
 function Carts() {
   const dispatch = useDispatch()
-  const { items, loading, updating, updatingItemId, error, orderPlaced, cartId } = useSelector(
+  const { items, loading, updating, updatingItemId, error, orderPlaced, cartId, isInitialized } = useSelector(
     (state) => state.carts
   )
   const myUserId = useSelector((state) => state.auth.userId)
@@ -40,11 +40,11 @@ function Carts() {
   const [appliedPromo, setAppliedPromo] = useState('')
 
   useEffect(() => {
-    // If cart is empty and hasn't been loaded, fetch from FakeStoreAPI
-    if (items.length === 0 && !orderPlaced) {
+    // Only fetch if cart has never been initialized
+    if (!isInitialized && !orderPlaced) {
       dispatch(fetchUserCart(myUserId || 2))
     }
-  }, [dispatch, myUserId, items.length, orderPlaced])
+  }, [dispatch, myUserId, isInitialized, orderPlaced])
 
   // Calculations
   const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0)

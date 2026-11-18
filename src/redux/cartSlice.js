@@ -12,15 +12,21 @@ import {
   decrementItemApi,
   removeItemApi,
   clearCartApi,
-} from '../services/cartService'
-import getErrorMessage from '../utils/getErrorMessage'
+} from '../services/cartService.js'
+import { getUserIdFromToken } from '../services/authService.js'
+import getErrorMessage from '../utils/getErrorMessage.js'
 
-// Local storage helpers
+// ==========================================
+// Local Storage Persistence Helpers
+// ==========================================
 const getStorageKey = (userId) => `fakestore_cart_${userId || 'default'}`
 
 const saveCartToStorage = (userId, data) => {
   try {
-    localStorage.setItem(getStorageKey(userId), JSON.stringify(data))
+    localStorage.setItem(
+      getStorageKey(userId),
+      JSON.stringify({ ...data, isInitialized: true })
+    )
   } catch (err) {
     console.warn('Storage write failed', err)
   }
@@ -43,11 +49,42 @@ const removeCartFromStorage = (userId) => {
   }
 }
 
+// Read existing saved cart immediately on initial load so Redux starts with correct items
+const getInitialCartState = () => {
+  try {
+    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('token') : null
+    let userId = 2
+    if (token) {
+      const parsedId = getUserIdFromToken(token)
+      if (parsedId) userId = parsedId
+    }
+    const cached = loadCartFromStorage(userId)
+    if (cached && Array.isArray(cached.items) && cached.isInitialized) {
+      return {
+        cartId: cached.cartId || 1,
+        userId: cached.userId || userId,
+        date: cached.date || null,
+        items: cached.items,
+        isInitialized: true,
+      }
+    }
+  } catch {
+    // fallback
+  }
+  return {
+    cartId: null,
+    userId: null,
+    date: null,
+    items: [],
+    isInitialized: false,
+  }
+}
+
 // ==========================================
 // THUNKS FOR MODERN CART FLOW
 // ==========================================
 
-// 1. FETCH active user cart from API
+// 1. FETCH active user cart from API (only if never initialized or reset)
 export const fetchUserCart = createAsyncThunk(
   'cart/fetchUserCart',
   async (targetUserId, { getState, rejectWithValue }) => {
@@ -57,14 +94,15 @@ export const fetchUserCart = createAsyncThunk(
 
       // Check local cached modifications first
       const cached = loadCartFromStorage(userId)
-      if (cached && Array.isArray(cached.items) && cached.items.length > 0) {
+      if (cached && Array.isArray(cached.items) && cached.isInitialized) {
         return cached
       }
 
       // Fetch fresh from FakeStoreAPI
       const cartData = await fetchActiveUserCart(userId)
-      saveCartToStorage(userId, cartData)
-      return cartData
+      const dataToSave = { ...cartData, isInitialized: true }
+      saveCartToStorage(userId, dataToSave)
+      return dataToSave
     } catch (error) {
       return rejectWithValue(getErrorMessage(error, 'Could not load your shopping cart'))
     }
@@ -93,6 +131,7 @@ export const addToCart = createAsyncThunk(
         userId,
         date: new Date().toISOString(),
         items: result.items,
+        isInitialized: true,
       }
       saveCartToStorage(userId, fullCart)
       return fullCart
@@ -123,6 +162,7 @@ export const incrementQuantity = createAsyncThunk(
         userId,
         date: new Date().toISOString(),
         items: result.items,
+        isInitialized: true,
       }
       saveCartToStorage(userId, fullCart)
       return fullCart
@@ -153,6 +193,7 @@ export const decrementQuantity = createAsyncThunk(
         userId,
         date: new Date().toISOString(),
         items: result.items,
+        isInitialized: true,
       }
       saveCartToStorage(userId, fullCart)
       return fullCart
@@ -183,6 +224,7 @@ export const removeFromCart = createAsyncThunk(
         userId,
         date: new Date().toISOString(),
         items: result.items,
+        isInitialized: true,
       }
       saveCartToStorage(userId, fullCart)
       return fullCart
@@ -202,12 +244,16 @@ export const clearCart = createAsyncThunk(
       const userId = auth.userId || state.userId || 2
 
       await clearCartApi(state.cartId || 1)
-      removeCartFromStorage(userId)
-
-      return {
+      const emptyCart = {
         cartId: state.cartId || 1,
+        userId,
+        date: new Date().toISOString(),
         items: [],
+        isInitialized: true,
       }
+      saveCartToStorage(userId, emptyCart)
+
+      return emptyCart
     } catch (error) {
       return rejectWithValue(getErrorMessage(error, 'Could not clear cart'))
     }
@@ -224,7 +270,14 @@ export const checkoutCart = createAsyncThunk(
       const userId = auth.userId || state.userId || 2
 
       await clearCartApi(state.cartId || 1)
-      removeCartFromStorage(userId)
+      const emptyCart = {
+        cartId: state.cartId || 1,
+        userId,
+        date: new Date().toISOString(),
+        items: [],
+        isInitialized: true,
+      }
+      saveCartToStorage(userId, emptyCart)
 
       const total = state.items.reduce((sum, item) => sum + item.price * item.quantity, 0)
       const count = state.items.reduce((sum, item) => sum + item.quantity, 0)
@@ -254,8 +307,9 @@ export const resetCartToApi = createAsyncThunk(
       const userId = stateUserId || 2
       removeCartFromStorage(userId)
       const cartData = await fetchActiveUserCart(userId)
-      saveCartToStorage(userId, cartData)
-      return cartData
+      const dataToSave = { ...cartData, isInitialized: true }
+      saveCartToStorage(userId, dataToSave)
+      return dataToSave
     } catch (error) {
       return rejectWithValue(getErrorMessage(error, 'Could not reload default cart from API'))
     }
@@ -316,13 +370,16 @@ export const removeCart = createAsyncThunk('carts/remove', async (id, { rejectWi
 // ==========================================
 // SLICE DEFINITION
 // ==========================================
+const initialCartData = getInitialCartState()
+
 const cartSlice = createSlice({
   name: 'carts',
   initialState: {
-    cartId: null,
-    userId: null,
-    date: null,
-    items: [], // Array of { productId, quantity, title, price, image, category }
+    cartId: initialCartData.cartId,
+    userId: initialCartData.userId,
+    date: initialCartData.date,
+    items: initialCartData.items,
+    isInitialized: initialCartData.isInitialized,
     loading: false, // initial cart fetch
     updating: false, // any mutation thunk is executing
     updatingItemId: null, // specific item id being updated
@@ -348,6 +405,7 @@ const cartSlice = createSlice({
       })
       .addCase(fetchUserCart.fulfilled, (state, action) => {
         state.loading = false
+        state.isInitialized = true
         state.cartId = action.payload.cartId
         state.userId = action.payload.userId
         state.date = action.payload.date
@@ -367,6 +425,7 @@ const cartSlice = createSlice({
       .addCase(addToCart.fulfilled, (state, action) => {
         state.updating = false
         state.updatingItemId = null
+        state.isInitialized = true
         state.cartId = action.payload.cartId
         state.items = action.payload.items
       })
@@ -385,6 +444,7 @@ const cartSlice = createSlice({
       .addCase(incrementQuantity.fulfilled, (state, action) => {
         state.updating = false
         state.updatingItemId = null
+        state.isInitialized = true
         state.items = action.payload.items
       })
       .addCase(incrementQuantity.rejected, (state, action) => {
@@ -402,6 +462,7 @@ const cartSlice = createSlice({
       .addCase(decrementQuantity.fulfilled, (state, action) => {
         state.updating = false
         state.updatingItemId = null
+        state.isInitialized = true
         state.items = action.payload.items
       })
       .addCase(decrementQuantity.rejected, (state, action) => {
@@ -419,6 +480,7 @@ const cartSlice = createSlice({
       .addCase(removeFromCart.fulfilled, (state, action) => {
         state.updating = false
         state.updatingItemId = null
+        state.isInitialized = true
         state.items = action.payload.items
       })
       .addCase(removeFromCart.rejected, (state, action) => {
@@ -434,6 +496,7 @@ const cartSlice = createSlice({
       })
       .addCase(clearCart.fulfilled, (state) => {
         state.updating = false
+        state.isInitialized = true
         state.items = []
       })
       .addCase(clearCart.rejected, (state, action) => {
@@ -448,6 +511,7 @@ const cartSlice = createSlice({
       })
       .addCase(checkoutCart.fulfilled, (state, action) => {
         state.updating = false
+        state.isInitialized = true
         state.items = []
         state.orderPlaced = action.payload
       })
@@ -463,6 +527,7 @@ const cartSlice = createSlice({
       })
       .addCase(resetCartToApi.fulfilled, (state, action) => {
         state.loading = false
+        state.isInitialized = true
         state.cartId = action.payload.cartId
         state.userId = action.payload.userId
         state.date = action.payload.date

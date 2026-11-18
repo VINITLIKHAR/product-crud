@@ -19,14 +19,15 @@ function Header() {
   const username = useSelector((state) => state.auth.username)
   const userId = useSelector((state) => state.auth.userId)
   const cartItems = useSelector((state) => state.carts.items)
+  const isInitialized = useSelector((state) => state.carts.isInitialized)
 
   const totalItemsCount = cartItems.reduce((sum, item) => sum + (item.quantity || 0), 0)
 
   useEffect(() => {
-    if (cartItems.length === 0) {
+    if (!isInitialized) {
       dispatch(fetchUserCart(userId || 2))
     }
-  }, [dispatch, userId, cartItems.length])
+  }, [dispatch, userId, isInitialized])
 
   const handleLogout = async () => {
     await dispatch(logout())

@@ -1,4 +1,4 @@
-import axiosInstance from '../api/axiosInstance'
+import axiosInstance from '../api/axiosInstance.js'
 
 // POST /auth/login  → { token: "..." }
 export const loginUser = async (credentials) => {
